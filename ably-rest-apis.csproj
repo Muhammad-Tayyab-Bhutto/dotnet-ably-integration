@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ably_rest_apis</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+    <PackageReference Include="Ably.IO" Version="1.2.18" />
+    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="8.0.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="src\Api\Controllers\" />
+    <Folder Include="src\Api\Filters\" />
+    <Folder Include="src\Api\Middlewares\" />
+    <Folder Include="src\Application\Abstractions\Messaging\" />
+    <Folder Include="src\Application\Abstractions\Security\" />
+    <Folder Include="src\Application\Abstractions\Persistence\" />
+    <Folder Include="src\Features\" />
+    <Folder Include="src\Domain\" />
+    <Folder Include="src\Infrastructure\Identity\" />
+    <Folder Include="src\Infrastructure\Messaging\" />
+    <Folder Include="src\Infrastructure\Caching\" />
+    <Folder Include="src\Infrastructure\Repositories\" />
+    <Folder Include="src\Infrastructure\Persistence\DbContext\" />
+    <Folder Include="src\Infrastructure\Persistence\Configurations\" />
+    <Folder Include="src\Infrastructure\Persistence\Migrations\" />
+    <Folder Include="src\Shared\Constants\" />
+    <Folder Include="src\Shared\Extensions\" />
+    <Folder Include="src\Shared\Utilities\" />
+    <Folder Include="src\tests\NewFolder\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="src\api\Api.csproj" />
+    <None Include="src\infrastructure\Infrastructure.csproj" />
+    <None Include="src\shared\Shared.csproj" />
+  </ItemGroup>
+
+</Project>
