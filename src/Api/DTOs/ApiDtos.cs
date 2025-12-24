@@ -9,6 +9,8 @@ namespace ably_rest_apis.src.Api.DTOs
         public DateTime ScheduledEndTime { get; set; }
         public DateTime ReportingWindowStart { get; set; }
         public DateTime ReportingWindowEnd { get; set; }
+        public int MaxStudentsPerRoom { get; set; } = 5;
+        public int NumberOfRooms { get; set; } = 1;
     }
 
     public class JoinSessionRequest
@@ -41,6 +43,31 @@ namespace ably_rest_apis.src.Api.DTOs
         public Guid ModeratorId { get; set; }
     }
 
+    public class AcceptRejectFlagRequest
+    {
+        public Guid FlagId { get; set; }
+        public Guid ModeratorId { get; set; }
+    }
+
+    public class ModeratorFlagUserRequest
+    {
+        public Guid StudentId { get; set; }
+        public Guid ModeratorId { get; set; }
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    public class KickStudentRequest
+    {
+        public Guid StudentId { get; set; }
+        public Guid ModeratorId { get; set; }
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    public class ReturnFromBreakRequest
+    {
+        public Guid StudentId { get; set; }
+    }
+
     public class CallNextStudentsRequest
     {
         public Guid AssessorId { get; set; }
@@ -68,6 +95,8 @@ namespace ably_rest_apis.src.Api.DTOs
         public string Description { get; set; } = string.Empty;
         public DateTime ScheduledStartTime { get; set; }
         public DateTime ScheduledEndTime { get; set; }
+        public int MaxStudentsPerRoom { get; set; }
+        public int NumberOfRooms { get; set; }
         public string Status { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
     }
@@ -78,6 +107,7 @@ namespace ably_rest_apis.src.Api.DTOs
         public Guid UserId { get; set; }
         public string Name { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
         public DateTime JoinedAt { get; set; }
         public bool IsConnected { get; set; }
     }
@@ -98,7 +128,9 @@ namespace ably_rest_apis.src.Api.DTOs
         public Guid StudentId { get; set; }
         public string StudentName { get; set; } = string.Empty;
         public string Reason { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
         public bool IsEscalated { get; set; }
+        public bool IsAccepted { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 
@@ -109,4 +141,11 @@ namespace ably_rest_apis.src.Api.DTOs
         public List<ParticipantResponse> Participants { get; set; } = new List<ParticipantResponse>();
         public DateTime CreatedAt { get; set; }
     }
+
+    public class WaitingStudentsResponse
+    {
+        public int TotalWaiting { get; set; }
+        public List<ParticipantResponse> Students { get; set; } = new List<ParticipantResponse>();
+    }
 }
+

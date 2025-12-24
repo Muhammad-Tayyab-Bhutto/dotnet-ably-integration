@@ -29,6 +29,7 @@ namespace ably_rest_apis.src.Shared.Contracts
         public string UserId { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
     }
 
     public class BreakRequestPayload
@@ -59,6 +60,52 @@ namespace ably_rest_apis.src.Shared.Contracts
         public string EscalatedBy { get; set; } = string.Empty;
     }
 
+    public class FlagAcceptedPayload
+    {
+        public string StudentId { get; set; } = string.Empty;
+        public string StudentName { get; set; } = string.Empty;
+        public string FlagId { get; set; } = string.Empty;
+        public string AcceptedBy { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    public class FlagRejectedPayload
+    {
+        public string StudentId { get; set; } = string.Empty;
+        public string FlagId { get; set; } = string.Empty;
+        public string RejectedBy { get; set; } = string.Empty;
+    }
+
+    public class UserKickedPayload
+    {
+        public string StudentId { get; set; } = string.Empty;
+        public string StudentName { get; set; } = string.Empty;
+        public string KickedBy { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    public class StudentWaitingPayload
+    {
+        public string StudentId { get; set; } = string.Empty;
+        public string StudentName { get; set; } = string.Empty;
+        public int Position { get; set; }
+    }
+
+    public class CalledToRoomPayload
+    {
+        public string StudentId { get; set; } = string.Empty;
+        public string StudentName { get; set; } = string.Empty;
+        public string RoomId { get; set; } = string.Empty;
+        public string RoomName { get; set; } = string.Empty;
+    }
+
+    public class ReturnedFromBreakPayload
+    {
+        public string StudentId { get; set; } = string.Empty;
+        public string StudentName { get; set; } = string.Empty;
+        public string NewStatus { get; set; } = string.Empty;
+    }
+
     public class RoomCreatedPayload
     {
         public string RoomId { get; set; } = string.Empty;
@@ -79,3 +126,4 @@ namespace ably_rest_apis.src.Shared.Contracts
         public string Reason { get; set; } = "Session completed";
     }
 }
+

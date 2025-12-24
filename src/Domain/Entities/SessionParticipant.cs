@@ -11,6 +11,7 @@ namespace ably_rest_apis.src.Domain.Entities
         public Guid SessionInstanceId { get; set; }
         public Guid UserId { get; set; }
         public Role Role { get; set; }
+        public ParticipantStatus Status { get; set; } = ParticipantStatus.Waiting;
         public DateTime JoinedAt { get; set; } = DateTime.UtcNow;
         public DateTime? LeftAt { get; set; }
         public bool IsKicked { get; set; } = false;

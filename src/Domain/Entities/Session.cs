@@ -12,6 +12,8 @@ namespace ably_rest_apis.src.Domain.Entities
         public DateTime ScheduledEndTime { get; set; }
         public DateTime ReportingWindowStart { get; set; }
         public DateTime ReportingWindowEnd { get; set; }
+        public int MaxStudentsPerRoom { get; set; } = 5;
+        public int NumberOfRooms { get; set; } = 1;
         public Guid CreatedById { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UpdatedAt { get; set; }

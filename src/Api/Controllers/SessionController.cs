@@ -38,7 +38,9 @@ namespace ably_rest_apis.src.Api.Controllers
                     ScheduledStartTime = request.ScheduledStartTime,
                     ScheduledEndTime = request.ScheduledEndTime,
                     ReportingWindowStart = request.ReportingWindowStart,
-                    ReportingWindowEnd = request.ReportingWindowEnd
+                    ReportingWindowEnd = request.ReportingWindowEnd,
+                    MaxStudentsPerRoom = request.MaxStudentsPerRoom,
+                    NumberOfRooms = request.NumberOfRooms
                 };
 
                 var created = await _sessionService.CreateSessionAsync(session, userId);
@@ -54,6 +56,8 @@ namespace ably_rest_apis.src.Api.Controllers
                         Description = created.Description,
                         ScheduledStartTime = created.ScheduledStartTime,
                         ScheduledEndTime = created.ScheduledEndTime,
+                        MaxStudentsPerRoom = created.MaxStudentsPerRoom,
+                        NumberOfRooms = created.NumberOfRooms,
                         Status = "Pending",
                         CreatedAt = created.CreatedAt
                     }
@@ -743,5 +747,411 @@ namespace ably_rest_apis.src.Api.Controllers
                 });
             }
         }
+
+        /// <summary>
+        /// Gets waiting students in a session
+        /// GET /api/sessions/{id}/waiting-students
+        /// </summary>
+        [HttpGet("{id}/waiting-students")]
+        public async Task<ActionResult<ApiResponse<WaitingStudentsResponse>>> GetWaitingStudents(Guid id)
+        {
+            try
+            {
+                var waitingStudents = await _sessionService.GetWaitingStudentsAsync(id);
+                var response = new WaitingStudentsResponse
+                {
+                    TotalWaiting = waitingStudents.Count,
+                    Students = waitingStudents.Select(p => new ParticipantResponse
+                    {
+                        Id = p.Id,
+                        UserId = p.UserId,
+                        Name = p.User?.Name ?? "",
+                        Role = p.Role.ToString(),
+                        Status = p.Status.ToString(),
+                        JoinedAt = p.JoinedAt,
+                        IsConnected = p.IsConnected
+                    }).ToList()
+                };
+
+                return Ok(new ApiResponse<WaitingStudentsResponse>
+                {
+                    Success = true,
+                    Data = response
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting waiting students for session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<WaitingStudentsResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Gets all participants in a session with optional status filter
+        /// GET /api/sessions/{id}/participants?status=Waiting
+        /// </summary>
+        [HttpGet("{id}/participants")]
+        public async Task<ActionResult<ApiResponse<List<ParticipantResponse>>>> GetParticipants(
+            Guid id,
+            [FromQuery] string? status)
+        {
+            try
+            {
+                ably_rest_apis.src.Domain.Enums.ParticipantStatus? statusEnum = null;
+                if (!string.IsNullOrEmpty(status))
+                {
+                    if (Enum.TryParse<ably_rest_apis.src.Domain.Enums.ParticipantStatus>(status, true, out var parsed))
+                    {
+                        statusEnum = parsed;
+                    }
+                }
+
+                var participants = await _sessionService.GetParticipantsByStatusAsync(id, statusEnum);
+                var response = participants.Select(p => new ParticipantResponse
+                {
+                    Id = p.Id,
+                    UserId = p.UserId,
+                    Name = p.User?.Name ?? "",
+                    Role = p.Role.ToString(),
+                    Status = p.Status.ToString(),
+                    JoinedAt = p.JoinedAt,
+                    IsConnected = p.IsConnected
+                }).ToList();
+
+                return Ok(new ApiResponse<List<ParticipantResponse>>
+                {
+                    Success = true,
+                    Data = response
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting participants for session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<List<ParticipantResponse>>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Moderator accepts a flag (auto-kicks the student)
+        /// POST /api/sessions/{id}/flag/accept
+        /// </summary>
+        [HttpPost("{id}/flag/accept")]
+        public async Task<ActionResult<ApiResponse<FlagResponse>>> AcceptFlag(
+            Guid id,
+            [FromBody] AcceptRejectFlagRequest request)
+        {
+            try
+            {
+                var flag = await _sessionService.AcceptFlagAsync(id, request.FlagId, request.ModeratorId);
+
+                return Ok(new ApiResponse<FlagResponse>
+                {
+                    Success = true,
+                    Message = "Flag accepted - Student kicked",
+                    Data = new FlagResponse
+                    {
+                        Id = flag.Id,
+                        StudentId = flag.StudentId,
+                        StudentName = flag.Student?.Name ?? "",
+                        Reason = flag.Reason,
+                        Status = flag.Status.ToString(),
+                        IsEscalated = flag.IsEscalated,
+                        IsAccepted = true,
+                        CreatedAt = flag.CreatedAt
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error accepting flag in session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Moderator rejects a flag
+        /// POST /api/sessions/{id}/flag/reject
+        /// </summary>
+        [HttpPost("{id}/flag/reject")]
+        public async Task<ActionResult<ApiResponse<FlagResponse>>> RejectFlag(
+            Guid id,
+            [FromBody] AcceptRejectFlagRequest request)
+        {
+            try
+            {
+                var flag = await _sessionService.RejectFlagAsync(id, request.FlagId, request.ModeratorId);
+
+                return Ok(new ApiResponse<FlagResponse>
+                {
+                    Success = true,
+                    Message = "Flag rejected",
+                    Data = new FlagResponse
+                    {
+                        Id = flag.Id,
+                        StudentId = flag.StudentId,
+                        StudentName = flag.Student?.Name ?? "",
+                        Reason = flag.Reason,
+                        Status = flag.Status.ToString(),
+                        IsEscalated = flag.IsEscalated,
+                        IsAccepted = false,
+                        CreatedAt = flag.CreatedAt
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error rejecting flag in session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Moderator flags a student directly
+        /// POST /api/sessions/{id}/moderator-flag
+        /// </summary>
+        [HttpPost("{id}/moderator-flag")]
+        public async Task<ActionResult<ApiResponse<FlagResponse>>> ModeratorFlagUser(
+            Guid id,
+            [FromBody] ModeratorFlagUserRequest request)
+        {
+            try
+            {
+                var flag = await _sessionService.ModeratorFlagUserAsync(id, request.StudentId, request.ModeratorId, request.Reason);
+
+                return Ok(new ApiResponse<FlagResponse>
+                {
+                    Success = true,
+                    Message = "User flagged by moderator",
+                    Data = new FlagResponse
+                    {
+                        Id = flag.Id,
+                        StudentId = flag.StudentId,
+                        Reason = flag.Reason,
+                        Status = flag.Status.ToString(),
+                        IsEscalated = flag.IsEscalated,
+                        IsAccepted = false,
+                        CreatedAt = flag.CreatedAt
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error moderator flagging user in session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<FlagResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Kicks a student from the session
+        /// POST /api/sessions/{id}/kick
+        /// </summary>
+        [HttpPost("{id}/kick")]
+        public async Task<ActionResult<ApiResponse<ParticipantResponse>>> KickStudent(
+            Guid id,
+            [FromBody] KickStudentRequest request)
+        {
+            try
+            {
+                var participant = await _sessionService.KickStudentAsync(id, request.StudentId, request.ModeratorId, request.Reason);
+
+                return Ok(new ApiResponse<ParticipantResponse>
+                {
+                    Success = true,
+                    Message = "Student kicked from session",
+                    Data = new ParticipantResponse
+                    {
+                        Id = participant.Id,
+                        UserId = participant.UserId,
+                        Name = participant.User?.Name ?? "",
+                        Role = participant.Role.ToString(),
+                        Status = participant.Status.ToString(),
+                        JoinedAt = participant.JoinedAt,
+                        IsConnected = participant.IsConnected
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<ParticipantResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<ParticipantResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<ParticipantResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error kicking student from session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<ParticipantResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Student returns from break
+        /// POST /api/sessions/{id}/return-from-break
+        /// </summary>
+        [HttpPost("{id}/return-from-break")]
+        public async Task<ActionResult<ApiResponse<ParticipantResponse>>> ReturnFromBreak(
+            Guid id,
+            [FromBody] ReturnFromBreakRequest request)
+        {
+            try
+            {
+                var participant = await _sessionService.ReturnFromBreakAsync(id, request.StudentId);
+
+                return Ok(new ApiResponse<ParticipantResponse>
+                {
+                    Success = true,
+                    Message = "Returned from break successfully",
+                    Data = new ParticipantResponse
+                    {
+                        Id = participant.Id,
+                        UserId = participant.UserId,
+                        Name = participant.User?.Name ?? "",
+                        Role = participant.Role.ToString(),
+                        Status = participant.Status.ToString(),
+                        JoinedAt = participant.JoinedAt,
+                        IsConnected = participant.IsConnected
+                    }
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<ParticipantResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<ParticipantResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error returning from break in session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<ParticipantResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
     }
 }
+

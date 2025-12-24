@@ -1,3 +1,5 @@
+using ably_rest_apis.src.Domain.Enums;
+
 namespace ably_rest_apis.src.Domain.Entities
 {
     /// <summary>
@@ -10,9 +12,12 @@ namespace ably_rest_apis.src.Domain.Entities
         public Guid StudentId { get; set; }
         public Guid FlaggedById { get; set; }
         public string Reason { get; set; } = string.Empty;
+        public FlagStatus Status { get; set; } = FlagStatus.Pending;
         public bool IsEscalated { get; set; } = false;
         public Guid? EscalatedById { get; set; }
         public DateTime? EscalatedAt { get; set; }
+        public Guid? RespondedById { get; set; }
+        public DateTime? RespondedAt { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public bool IsResolved { get; set; } = false;
         public string? Resolution { get; set; }
@@ -22,5 +27,6 @@ namespace ably_rest_apis.src.Domain.Entities
         public virtual User? Student { get; set; }
         public virtual User? FlaggedBy { get; set; }
         public virtual User? EscalatedBy { get; set; }
+        public virtual User? RespondedBy { get; set; }
     }
 }
