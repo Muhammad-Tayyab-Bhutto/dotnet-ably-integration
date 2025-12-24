@@ -246,6 +246,29 @@ namespace ably_rest_apis.src.Features.Sessions
                 return existingParticipant;
             }
 
+            // Determine participant status for students
+            ParticipantStatus initialStatus = ParticipantStatus.Waiting;
+            Room? assignedRoom = null;
+
+            if (user.Role == Role.Student)
+            {
+                // Try to find an available room for the student
+                assignedRoom = await FindAvailableRoomAsync(instance.Id, session.MaxStudentsPerRoom);
+                if (assignedRoom != null)
+                {
+                    initialStatus = ParticipantStatus.InRoom;
+                }
+                else
+                {
+                    initialStatus = ParticipantStatus.Waiting;
+                }
+            }
+            else
+            {
+                // Non-students (Assessors, Moderators, Admins) are in room by default
+                initialStatus = ParticipantStatus.InRoom;
+            }
+
             // Create participant
             var participant = new SessionParticipant
             {
@@ -253,25 +276,32 @@ namespace ably_rest_apis.src.Features.Sessions
                 SessionInstanceId = instance.Id,
                 UserId = userId,
                 Role = user.Role,
+                Status = initialStatus,
                 JoinedAt = now,
-                IsConnected = true
+                IsConnected = true,
+                CurrentRoomId = assignedRoom?.Id
             };
 
             _dbContext.SessionParticipants.Add(participant);
 
             // Create audit event
+            var eventType = user.Role == Role.Student && initialStatus == ParticipantStatus.Waiting 
+                ? EventType.STUDENT_WAITING 
+                : EventType.USER_JOINED;
+
             var sessionEvent = new SessionEvent
             {
                 Id = Guid.NewGuid(),
                 SessionInstanceId = instance.Id,
-                Type = EventType.USER_JOINED,
+                Type = eventType,
                 EmittedByUserId = userId,
                 EmittedByRole = Role.System,
                 PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new UserJoinedPayload
                 {
                     UserId = userId.ToString(),
                     Role = user.Role.ToString(),
-                    Name = user.Name
+                    Name = user.Name,
+                    Status = initialStatus.ToString()
                 }),
                 Timestamp = now,
                 IsPublished = false
@@ -284,14 +314,15 @@ namespace ably_rest_apis.src.Features.Sessions
             var ablyEvent = new SessionEventDto
             {
                 EventId = sessionEvent.Id.ToString(),
-                Type = EventType.USER_JOINED.ToString(),
+                Type = eventType.ToString(),
                 SessionId = sessionId.ToString(),
                 EmittedBy = new EmittedByDto { UserId = userId.ToString(), Role = "system" },
                 Payload = new UserJoinedPayload
                 {
                     UserId = userId.ToString(),
                     Role = user.Role.ToString(),
-                    Name = user.Name
+                    Name = user.Name,
+                    Status = initialStatus.ToString()
                 },
                 Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
             };
@@ -303,7 +334,7 @@ namespace ably_rest_apis.src.Features.Sessions
                 await _dbContext.SaveChangesAsync();
             }
 
-            _logger.LogInformation("User {UserId} joined session {SessionId}", userId, sessionId);
+            _logger.LogInformation("User {UserId} joined session {SessionId} with status {Status}", userId, sessionId, initialStatus);
             return participant;
         }
 
@@ -477,6 +508,16 @@ namespace ably_rest_apis.src.Features.Sessions
             breakRequest.Status = BreakRequestStatus.Approved;
             breakRequest.ApprovedById = moderatorId;
             breakRequest.ApprovedAt = now;
+
+            // Update participant status to OnBreak
+            var participant = await _dbContext.SessionParticipants
+                .FirstOrDefaultAsync(sp => sp.SessionInstanceId == breakRequest.SessionInstanceId && sp.UserId == breakRequest.StudentId);
+            
+            if (participant != null)
+            {
+                participant.Status = ParticipantStatus.OnBreak;
+                participant.CurrentRoomId = null; // Remove from room while on break
+            }
 
             // Create audit event
             var sessionEvent = new SessionEvent
@@ -874,5 +915,507 @@ namespace ably_rest_apis.src.Features.Sessions
         }
 
         #endregion
+
+        #region Waiting Students Operations
+
+        public async Task<List<SessionParticipant>> GetWaitingStudentsAsync(Guid sessionId)
+        {
+            var instance = await GetActiveInstanceAsync(sessionId);
+            if (instance == null)
+                return new List<SessionParticipant>();
+
+            return await _dbContext.SessionParticipants
+                .Include(sp => sp.User)
+                .Where(sp => sp.SessionInstanceId == instance.Id && 
+                             sp.Status == ParticipantStatus.Waiting &&
+                             sp.Role == Role.Student &&
+                             !sp.IsKicked)
+                .OrderBy(sp => sp.JoinedAt)
+                .ToListAsync();
+        }
+
+        public async Task<List<SessionParticipant>> GetParticipantsByStatusAsync(Guid sessionId, ParticipantStatus? status)
+        {
+            var instance = await GetActiveInstanceAsync(sessionId);
+            if (instance == null)
+                return new List<SessionParticipant>();
+
+            var query = _dbContext.SessionParticipants
+                .Include(sp => sp.User)
+                .Where(sp => sp.SessionInstanceId == instance.Id);
+
+            if (status.HasValue)
+            {
+                query = query.Where(sp => sp.Status == status.Value);
+            }
+
+            return await query.OrderBy(sp => sp.JoinedAt).ToListAsync();
+        }
+
+        #endregion
+
+        #region Kick Student Operations
+
+        public async Task<SessionParticipant> KickStudentAsync(Guid sessionId, Guid studentId, Guid moderatorId, string reason)
+        {
+            var moderator = await _dbContext.Users.FindAsync(moderatorId);
+            if (moderator == null || (moderator.Role != Role.Moderator && moderator.Role != Role.Admin))
+                throw new UnauthorizedAccessException("Only moderators or admins can kick students");
+
+            var student = await _dbContext.Users.FindAsync(studentId);
+            if (student == null)
+                throw new KeyNotFoundException("Student not found");
+
+            var instance = await GetActiveInstanceAsync(sessionId);
+            if (instance == null)
+                throw new InvalidOperationException("Session is not active");
+
+            var participant = await _dbContext.SessionParticipants
+                .FirstOrDefaultAsync(sp => sp.SessionInstanceId == instance.Id && sp.UserId == studentId);
+
+            if (participant == null)
+                throw new KeyNotFoundException("Student is not in this session");
+
+            if (participant.IsKicked)
+                throw new InvalidOperationException("Student is already kicked");
+
+            var now = DateTime.UtcNow;
+            participant.IsKicked = true;
+            participant.KickReason = reason;
+            participant.Status = ParticipantStatus.Kicked;
+            participant.IsConnected = false;
+            participant.CurrentRoomId = null;
+
+            // Create audit event
+            var sessionEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = instance.Id,
+                Type = EventType.USER_KICKED,
+                EmittedByUserId = moderatorId,
+                EmittedByRole = moderator.Role,
+                PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new UserKickedPayload
+                {
+                    StudentId = studentId.ToString(),
+                    StudentName = student.Name,
+                    KickedBy = moderator.Name,
+                    Reason = reason
+                }),
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(sessionEvent);
+
+            await _dbContext.SaveChangesAsync();
+
+            // Publish to Ably
+            var ablyEvent = new SessionEventDto
+            {
+                EventId = sessionEvent.Id.ToString(),
+                Type = EventType.USER_KICKED.ToString(),
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = moderatorId.ToString(), Role = moderator.Role.ToString().ToLower() },
+                Payload = new UserKickedPayload
+                {
+                    StudentId = studentId.ToString(),
+                    StudentName = student.Name,
+                    KickedBy = moderator.Name,
+                    Reason = reason
+                },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            var published = await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+            if (published)
+            {
+                sessionEvent.IsPublished = true;
+                await _dbContext.SaveChangesAsync();
+            }
+
+            _logger.LogInformation("Student {StudentId} kicked by {ModeratorId} from session {SessionId}", 
+                studentId, moderatorId, sessionId);
+            return participant;
+        }
+
+        #endregion
+
+        #region Return From Break Operations
+
+        public async Task<SessionParticipant> ReturnFromBreakAsync(Guid sessionId, Guid studentId)
+        {
+            var student = await _dbContext.Users.FindAsync(studentId);
+            if (student == null)
+                throw new KeyNotFoundException("Student not found");
+
+            var session = await _dbContext.Sessions.FindAsync(sessionId);
+            if (session == null)
+                throw new KeyNotFoundException("Session not found");
+
+            var instance = await GetActiveInstanceAsync(sessionId);
+            if (instance == null)
+                throw new InvalidOperationException("Session is not active");
+
+            var participant = await _dbContext.SessionParticipants
+                .FirstOrDefaultAsync(sp => sp.SessionInstanceId == instance.Id && sp.UserId == studentId);
+
+            if (participant == null)
+                throw new KeyNotFoundException("Student is not in this session");
+
+            if (participant.Status != ParticipantStatus.OnBreak)
+                throw new InvalidOperationException("Student is not on break");
+
+            var now = DateTime.UtcNow;
+            participant.IsConnected = true;
+
+            // Try to assign to an available room
+            var availableRoom = await FindAvailableRoomAsync(instance.Id, session.MaxStudentsPerRoom);
+            
+            if (availableRoom != null)
+            {
+                participant.Status = ParticipantStatus.InRoom;
+                participant.CurrentRoomId = availableRoom.Id;
+            }
+            else
+            {
+                participant.Status = ParticipantStatus.Waiting;
+            }
+
+            // Create audit event
+            var sessionEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = instance.Id,
+                Type = EventType.RETURNED_FROM_BREAK,
+                EmittedByUserId = studentId,
+                EmittedByRole = Role.Student,
+                PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new ReturnedFromBreakPayload
+                {
+                    StudentId = studentId.ToString(),
+                    StudentName = student.Name,
+                    NewStatus = participant.Status.ToString()
+                }),
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(sessionEvent);
+
+            await _dbContext.SaveChangesAsync();
+
+            // Publish to Ably
+            var ablyEvent = new SessionEventDto
+            {
+                EventId = sessionEvent.Id.ToString(),
+                Type = EventType.RETURNED_FROM_BREAK.ToString(),
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = studentId.ToString(), Role = "student" },
+                Payload = new ReturnedFromBreakPayload
+                {
+                    StudentId = studentId.ToString(),
+                    StudentName = student.Name,
+                    NewStatus = participant.Status.ToString()
+                },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+
+            _logger.LogInformation("Student {StudentId} returned from break in session {SessionId}", studentId, sessionId);
+            return participant;
+        }
+
+        private async Task<Room?> FindAvailableRoomAsync(Guid sessionInstanceId, int maxStudentsPerRoom)
+        {
+            var rooms = await _dbContext.Rooms
+                .Include(r => r.Participants)
+                .Where(r => r.SessionInstanceId == sessionInstanceId && r.IsActive)
+                .ToListAsync();
+
+            foreach (var room in rooms)
+            {
+                var studentCount = room.Participants.Count(p => p.Role == Role.Student && !p.IsKicked);
+                if (studentCount < maxStudentsPerRoom)
+                {
+                    return room;
+                }
+            }
+
+            return null;
+        }
+
+        #endregion
+
+        #region Flag Accept/Reject Operations
+
+        public async Task<Flag> AcceptFlagAsync(Guid sessionId, Guid flagId, Guid moderatorId)
+        {
+            var moderator = await _dbContext.Users.FindAsync(moderatorId);
+            if (moderator == null || moderator.Role != Role.Moderator)
+                throw new UnauthorizedAccessException("Only moderators can accept flags");
+
+            var flag = await _dbContext.Flags
+                .Include(f => f.Student)
+                .FirstOrDefaultAsync(f => f.Id == flagId);
+
+            if (flag == null)
+                throw new KeyNotFoundException("Flag not found");
+
+            if (flag.Status != FlagStatus.Pending)
+                throw new InvalidOperationException("Flag is already processed");
+
+            var now = DateTime.UtcNow;
+            flag.Status = FlagStatus.Accepted;
+            flag.RespondedById = moderatorId;
+            flag.RespondedAt = now;
+            flag.IsResolved = true;
+            flag.Resolution = "Accepted - Student kicked";
+
+            // Auto-kick the student
+            var participant = await _dbContext.SessionParticipants
+                .FirstOrDefaultAsync(sp => sp.SessionInstanceId == flag.SessionInstanceId && sp.UserId == flag.StudentId);
+
+            if (participant != null)
+            {
+                participant.IsKicked = true;
+                participant.KickReason = $"Flag accepted: {flag.Reason}";
+                participant.Status = ParticipantStatus.Kicked;
+                participant.IsConnected = false;
+                participant.CurrentRoomId = null;
+            }
+
+            // Create FLAG_ACCEPTED event
+            var flagEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = flag.SessionInstanceId,
+                Type = EventType.FLAG_ACCEPTED,
+                EmittedByUserId = moderatorId,
+                EmittedByRole = Role.Moderator,
+                PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new FlagAcceptedPayload
+                {
+                    StudentId = flag.StudentId.ToString(),
+                    StudentName = flag.Student?.Name ?? "",
+                    FlagId = flagId.ToString(),
+                    AcceptedBy = moderator.Name,
+                    Reason = flag.Reason
+                }),
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(flagEvent);
+
+            // Create USER_KICKED event
+            var kickEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = flag.SessionInstanceId,
+                Type = EventType.USER_KICKED,
+                EmittedByUserId = moderatorId,
+                EmittedByRole = Role.Moderator,
+                PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new UserKickedPayload
+                {
+                    StudentId = flag.StudentId.ToString(),
+                    StudentName = flag.Student?.Name ?? "",
+                    KickedBy = moderator.Name,
+                    Reason = $"Flag accepted: {flag.Reason}"
+                }),
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(kickEvent);
+
+            await _dbContext.SaveChangesAsync();
+
+            // Publish FLAG_ACCEPTED to Ably
+            var ablyEvent = new SessionEventDto
+            {
+                EventId = flagEvent.Id.ToString(),
+                Type = EventType.FLAG_ACCEPTED.ToString(),
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = moderatorId.ToString(), Role = "moderator" },
+                Payload = new FlagAcceptedPayload
+                {
+                    StudentId = flag.StudentId.ToString(),
+                    StudentName = flag.Student?.Name ?? "",
+                    FlagId = flagId.ToString(),
+                    AcceptedBy = moderator.Name,
+                    Reason = flag.Reason
+                },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+
+            // Publish USER_KICKED to Ably
+            var kickAblyEvent = new SessionEventDto
+            {
+                EventId = kickEvent.Id.ToString(),
+                Type = EventType.USER_KICKED.ToString(),
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = moderatorId.ToString(), Role = "moderator" },
+                Payload = new UserKickedPayload
+                {
+                    StudentId = flag.StudentId.ToString(),
+                    StudentName = flag.Student?.Name ?? "",
+                    KickedBy = moderator.Name,
+                    Reason = $"Flag accepted: {flag.Reason}"
+                },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            await _ablyPublisher.PublishAsync(sessionId.ToString(), kickAblyEvent);
+
+            _logger.LogInformation("Flag {FlagId} accepted by moderator {ModeratorId}, student {StudentId} kicked", 
+                flagId, moderatorId, flag.StudentId);
+            return flag;
+        }
+
+        public async Task<Flag> RejectFlagAsync(Guid sessionId, Guid flagId, Guid moderatorId)
+        {
+            var moderator = await _dbContext.Users.FindAsync(moderatorId);
+            if (moderator == null || moderator.Role != Role.Moderator)
+                throw new UnauthorizedAccessException("Only moderators can reject flags");
+
+            var flag = await _dbContext.Flags
+                .Include(f => f.Student)
+                .FirstOrDefaultAsync(f => f.Id == flagId);
+
+            if (flag == null)
+                throw new KeyNotFoundException("Flag not found");
+
+            if (flag.Status != FlagStatus.Pending)
+                throw new InvalidOperationException("Flag is already processed");
+
+            var now = DateTime.UtcNow;
+            flag.Status = FlagStatus.Rejected;
+            flag.RespondedById = moderatorId;
+            flag.RespondedAt = now;
+            flag.IsResolved = true;
+            flag.Resolution = "Rejected by moderator";
+
+            // Create FLAG_REJECTED event
+            var sessionEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = flag.SessionInstanceId,
+                Type = EventType.FLAG_REJECTED,
+                EmittedByUserId = moderatorId,
+                EmittedByRole = Role.Moderator,
+                PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new FlagRejectedPayload
+                {
+                    StudentId = flag.StudentId.ToString(),
+                    FlagId = flagId.ToString(),
+                    RejectedBy = moderator.Name
+                }),
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(sessionEvent);
+
+            await _dbContext.SaveChangesAsync();
+
+            // Publish to Ably
+            var ablyEvent = new SessionEventDto
+            {
+                EventId = sessionEvent.Id.ToString(),
+                Type = EventType.FLAG_REJECTED.ToString(),
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = moderatorId.ToString(), Role = "moderator" },
+                Payload = new FlagRejectedPayload
+                {
+                    StudentId = flag.StudentId.ToString(),
+                    FlagId = flagId.ToString(),
+                    RejectedBy = moderator.Name
+                },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+
+            _logger.LogInformation("Flag {FlagId} rejected by moderator {ModeratorId}", flagId, moderatorId);
+            return flag;
+        }
+
+        public async Task<Flag> ModeratorFlagUserAsync(Guid sessionId, Guid studentId, Guid moderatorId, string reason)
+        {
+            var moderator = await _dbContext.Users.FindAsync(moderatorId);
+            if (moderator == null || moderator.Role != Role.Moderator)
+                throw new UnauthorizedAccessException("Only moderators can flag users directly");
+
+            var student = await _dbContext.Users.FindAsync(studentId);
+            if (student == null)
+                throw new KeyNotFoundException("Student not found");
+
+            var instance = await GetActiveInstanceAsync(sessionId);
+            if (instance == null)
+                throw new InvalidOperationException("Session is not active");
+
+            var now = DateTime.UtcNow;
+
+            var flag = new Flag
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = instance.Id,
+                StudentId = studentId,
+                FlaggedById = moderatorId,
+                Reason = reason,
+                Status = FlagStatus.Pending,
+                CreatedAt = now
+            };
+
+            _dbContext.Flags.Add(flag);
+
+            // Create audit event
+            var sessionEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = instance.Id,
+                Type = EventType.FLAG_USER,
+                EmittedByUserId = moderatorId,
+                EmittedByRole = Role.Moderator,
+                PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new FlagUserPayload
+                {
+                    StudentId = studentId.ToString(),
+                    StudentName = student.Name,
+                    Reason = reason,
+                    FlaggedBy = moderator.Name
+                }),
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(sessionEvent);
+
+            await _dbContext.SaveChangesAsync();
+
+            // Publish to Ably
+            var ablyEvent = new SessionEventDto
+            {
+                EventId = sessionEvent.Id.ToString(),
+                Type = EventType.FLAG_USER.ToString(),
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = moderatorId.ToString(), Role = "moderator" },
+                Payload = new FlagUserPayload
+                {
+                    StudentId = studentId.ToString(),
+                    StudentName = student.Name,
+                    Reason = reason,
+                    FlaggedBy = moderator.Name
+                },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            var published = await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+            if (published)
+            {
+                sessionEvent.IsPublished = true;
+                await _dbContext.SaveChangesAsync();
+            }
+
+            _logger.LogInformation("Student {StudentId} flagged by moderator {ModeratorId} in session {SessionId}", 
+                studentId, moderatorId, sessionId);
+            return flag;
+        }
+
+        #endregion
     }
 }
+
