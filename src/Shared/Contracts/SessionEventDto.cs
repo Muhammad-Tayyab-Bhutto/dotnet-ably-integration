@@ -1,4 +1,5 @@
 using ably_rest_apis.src.Domain.Enums;
+using Newtonsoft.Json;
 
 namespace ably_rest_apis.src.Shared.Contracts
 {
@@ -108,8 +109,13 @@ namespace ably_rest_apis.src.Shared.Contracts
 
     public class RoomCreatedPayload
     {
+        [JsonProperty("roomId")]
         public string RoomId { get; set; } = string.Empty;
+
+        [JsonProperty("roomName")]
         public string RoomName { get; set; } = string.Empty;
+
+        [JsonProperty("participants")]
         public List<string> Participants { get; set; } = new List<string>();
     }
 

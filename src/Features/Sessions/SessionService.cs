@@ -323,7 +323,10 @@ namespace ably_rest_apis.src.Features.Sessions
                 throw new InvalidOperationException("Session is not active");
 
             // Lazy creation of rooms if they don't exist (handle legacy sessions)
-            if (session.NumberOfRooms > 0 && !await _dbContext.Rooms.AnyAsync(r => r.SessionInstanceId == instance.Id))
+            // Ensure at least 1 room exists, even if NumberOfRooms is 0
+            int targetRoomCount = Math.Max(session.NumberOfRooms, 1);
+            
+            if (!await _dbContext.Rooms.AnyAsync(r => r.SessionInstanceId == instance.Id))
             {
                 await _sessionLock.WaitAsync();
                 try
@@ -331,7 +334,7 @@ namespace ably_rest_apis.src.Features.Sessions
                     // Double-check inside lock
                     if (!await _dbContext.Rooms.AnyAsync(r => r.SessionInstanceId == instance.Id))
                     {
-                        for (int i = 1; i <= session.NumberOfRooms; i++)
+                        for (int i = 1; i <= targetRoomCount; i++)
                         {
                             var room = new Room
                             {
@@ -363,7 +366,7 @@ namespace ably_rest_apis.src.Features.Sessions
                             _dbContext.SessionEvents.Add(roomEvent);
                         }
                         await _dbContext.SaveChangesAsync();
-                        _logger.LogInformation("Lazy-created {Count} rooms for session {SessionId}", session.NumberOfRooms, sessionId);
+                        _logger.LogInformation("Lazy-created {Count} rooms for session {SessionId}", targetRoomCount, sessionId);
                     }
                 }
                 finally
@@ -1429,15 +1432,20 @@ namespace ably_rest_apis.src.Features.Sessions
                 .Where(r => r.SessionInstanceId == sessionInstanceId && r.IsActive)
                 .ToListAsync();
 
+            _logger.LogInformation("FindAvailableRoom: Found {Count} active rooms for session instance {InstanceId}", rooms.Count, sessionInstanceId);
+
             foreach (var room in rooms)
             {
                 var studentCount = room.Participants.Count(p => p.Role == Role.Student && !p.IsKicked);
+                _logger.LogInformation("FindAvailableRoom: Room {RoomName} ({RoomId}) has {Count}/{Max} students", room.Name, room.Id, studentCount, maxStudentsPerRoom);
+                
                 if (studentCount < maxStudentsPerRoom)
                 {
                     return room;
                 }
             }
 
+            _logger.LogWarning("FindAvailableRoom: No available room found for session instance {InstanceId} (Max capacity: {Max})", sessionInstanceId, maxStudentsPerRoom);
             return null;
         }
 
