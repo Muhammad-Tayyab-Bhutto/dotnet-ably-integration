@@ -410,7 +410,8 @@ namespace ably_rest_apis.src.Features.Sessions
                 // Retry assignment if waiting (e.g. if rooms were just created)
                 if (user.Role == Role.Student && existingParticipant.Status == ParticipantStatus.Waiting)
                 {
-                    var room = await FindAvailableRoomAsync(instance.Id, session.MaxStudentsPerRoom);
+                    int effectiveMaxStudents = Math.Max(session.MaxStudentsPerRoom, 1);
+                    var room = await FindAvailableRoomAsync(instance.Id, effectiveMaxStudents);
                     if (room != null)
                     {
                         existingParticipant.Status = ParticipantStatus.InRoom;
@@ -433,7 +434,8 @@ namespace ably_rest_apis.src.Features.Sessions
             if (user.Role == Role.Student)
             {
                 // Try to find an available room for the student
-                assignedRoom = await FindAvailableRoomAsync(instance.Id, session.MaxStudentsPerRoom);
+                int effectiveMaxStudents = Math.Max(session.MaxStudentsPerRoom, 1);
+                assignedRoom = await FindAvailableRoomAsync(instance.Id, effectiveMaxStudents);
                 if (assignedRoom != null)
                 {
                     initialStatus = ParticipantStatus.InRoom;
