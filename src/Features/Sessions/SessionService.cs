@@ -60,6 +60,69 @@ namespace ably_rest_apis.src.Features.Sessions
                 .ToListAsync();
         }
 
+        public async Task<Session> UpdateSessionAsync(Guid sessionId, Session updatedSession, Guid adminId)
+        {
+            var admin = await _dbContext.Users.FindAsync(adminId);
+            if (admin == null || admin.Role != Role.Admin)
+                throw new UnauthorizedAccessException("Only admins can update sessions");
+
+            var session = await _dbContext.Sessions.FindAsync(sessionId);
+            if (session == null)
+                throw new KeyNotFoundException($"Session {sessionId} not found");
+
+            // Check if session has an active instance
+            var activeInstance = await _dbContext.SessionInstances
+                .FirstOrDefaultAsync(si => si.SessionId == sessionId && si.Status == SessionStatus.Active);
+            
+            if (activeInstance != null)
+                throw new InvalidOperationException("Cannot update a session that is currently active");
+
+            // Update fields
+            session.Name = updatedSession.Name;
+            session.Description = updatedSession.Description;
+            session.ScheduledStartTime = updatedSession.ScheduledStartTime;
+            session.ScheduledEndTime = updatedSession.ScheduledEndTime;
+            session.ReportingWindowStart = updatedSession.ReportingWindowStart;
+            session.ReportingWindowEnd = updatedSession.ReportingWindowEnd;
+            session.MaxStudentsPerRoom = updatedSession.MaxStudentsPerRoom;
+            session.NumberOfRooms = updatedSession.NumberOfRooms;
+            // Update assigned users
+            session.AssignedStudentIds = updatedSession.AssignedStudentIds;
+            session.AssignedAssessorIds = updatedSession.AssignedAssessorIds;
+            session.AssignedModeratorIds = updatedSession.AssignedModeratorIds;
+            session.UpdatedAt = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("Updated session {SessionId} by admin {AdminId}", sessionId, adminId);
+            return session;
+        }
+
+        public async Task<bool> DeleteSessionAsync(Guid sessionId, Guid adminId)
+        {
+            var admin = await _dbContext.Users.FindAsync(adminId);
+            if (admin == null || admin.Role != Role.Admin)
+                throw new UnauthorizedAccessException("Only admins can delete sessions");
+
+            var session = await _dbContext.Sessions
+                .Include(s => s.Instances)
+                .FirstOrDefaultAsync(s => s.Id == sessionId);
+
+            if (session == null)
+                throw new KeyNotFoundException($"Session {sessionId} not found");
+
+            // Check if session has an active instance
+            var activeInstance = session.Instances.FirstOrDefault(i => i.Status == SessionStatus.Active);
+            if (activeInstance != null)
+                throw new InvalidOperationException("Cannot delete a session that is currently active");
+
+            _dbContext.Sessions.Remove(session);
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("Deleted session {SessionId} by admin {AdminId}", sessionId, adminId);
+            return true;
+        }
+
         #endregion
 
         #region Session Instance Operations
@@ -116,7 +179,43 @@ namespace ably_rest_apis.src.Features.Sessions
 
             await _dbContext.SaveChangesAsync();
 
-            // Publish to Ably
+            // Auto-create rooms
+            for (int i = 1; i <= session.NumberOfRooms; i++)
+            {
+                var room = new Room
+                {
+                    Id = Guid.NewGuid(),
+                    SessionInstanceId = instance.Id,
+                    Name = $"Room {i}",
+                    CreatedAt = now,
+                    IsActive = true
+                };
+                _dbContext.Rooms.Add(room);
+                
+                // Create ROOM_CREATED event (Internal only, no need to spam Ably yet or maybe we should?)
+                // Let's publish it so UI updates immediately
+                var roomEvent = new SessionEvent
+                {
+                    Id = Guid.NewGuid(),
+                    SessionInstanceId = instance.Id,
+                    Type = EventType.ROOM_CREATED,
+                    EmittedByUserId = adminId,
+                    EmittedByRole = Role.System,
+                    PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new RoomCreatedPayload
+                    {
+                        RoomId = room.Id.ToString(),
+                        RoomName = room.Name,
+                        Participants = new List<string>()
+                    }),
+                    Timestamp = now,
+                    IsPublished = false
+                };
+                _dbContext.SessionEvents.Add(roomEvent);
+            }
+            
+            await _dbContext.SaveChangesAsync();
+
+            // Publish session start to Ably
             var ablyEvent = new SessionEventDto
             {
                 EventId = sessionEvent.Id.ToString(),
@@ -134,7 +233,8 @@ namespace ably_rest_apis.src.Features.Sessions
                 await _dbContext.SaveChangesAsync();
             }
 
-            _logger.LogInformation("Started session {SessionId} instance {InstanceId}", sessionId, instance.Id);
+            _logger.LogInformation("Started session {SessionId} instance {InstanceId} with {RoomCount} auto-created rooms", 
+                sessionId, instance.Id, session.NumberOfRooms);
             return instance;
         }
 
@@ -222,12 +322,70 @@ namespace ably_rest_apis.src.Features.Sessions
             if (instance == null)
                 throw new InvalidOperationException("Session is not active");
 
-            // Check reporting window (for students)
+            // Lazy creation of rooms if they don't exist (handle legacy sessions)
+            if (session.NumberOfRooms > 0 && !await _dbContext.Rooms.AnyAsync(r => r.SessionInstanceId == instance.Id))
+            {
+                await _sessionLock.WaitAsync();
+                try
+                {
+                    // Double-check inside lock
+                    if (!await _dbContext.Rooms.AnyAsync(r => r.SessionInstanceId == instance.Id))
+                    {
+                        for (int i = 1; i <= session.NumberOfRooms; i++)
+                        {
+                            var room = new Room
+                            {
+                                Id = Guid.NewGuid(),
+                                SessionInstanceId = instance.Id,
+                                Name = $"Room {i}",
+                                CreatedAt = DateTime.UtcNow,
+                                IsActive = true
+                            };
+                            _dbContext.Rooms.Add(room);
+
+                            // Create ROOM_CREATED event
+                            var roomEvent = new SessionEvent
+                            {
+                                Id = Guid.NewGuid(),
+                                SessionInstanceId = instance.Id,
+                                Type = EventType.ROOM_CREATED,
+                                EmittedByUserId = session.CreatedById, // Use creator ID as fallback
+                                EmittedByRole = Role.System,
+                                PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new RoomCreatedPayload
+                                {
+                                    RoomId = room.Id.ToString(),
+                                    RoomName = room.Name,
+                                    Participants = new List<string>()
+                                }),
+                                Timestamp = DateTime.UtcNow,
+                                IsPublished = false
+                            };
+                            _dbContext.SessionEvents.Add(roomEvent);
+                        }
+                        await _dbContext.SaveChangesAsync();
+                        _logger.LogInformation("Lazy-created {Count} rooms for session {SessionId}", session.NumberOfRooms, sessionId);
+                    }
+                }
+                finally
+                {
+                    _sessionLock.Release();
+                }
+            }
+
+            // Check reporting window (for students) - only block if session hasn't started yet
+            // If session is active, allow students to join even outside the reporting window
             var now = DateTime.UtcNow;
             if (user.Role == Role.Student)
             {
-                if (now < session.ReportingWindowStart || now > session.ReportingWindowEnd)
-                    throw new InvalidOperationException("Outside reporting window");
+                // Only block if we're before the reporting window start (too early)
+                if (now < session.ReportingWindowStart)
+                    throw new InvalidOperationException("Session has not started yet. Please wait for the reporting window.");
+                
+                // Log a warning if outside reporting window but session is active
+                if (now > session.ReportingWindowEnd)
+                {
+                    _logger.LogWarning("Student {UserId} joining session {SessionId} after reporting window end", userId, sessionId);
+                }
             }
 
             // Check if already joined
@@ -238,6 +396,25 @@ namespace ably_rest_apis.src.Features.Sessions
             {
                 if (existingParticipant.IsKicked)
                     throw new InvalidOperationException("You have been removed from this session");
+
+                // Check 3-strike rule for students
+                if (user.Role == Role.Student && existingParticipant.DisconnectCount >= 3 && !existingParticipant.HasRejoinPermission)
+                {
+                    _logger.LogWarning("Student {UserId} denied rejoin due to excessive disconnects ({Count})", userId, existingParticipant.DisconnectCount);
+                    throw new InvalidOperationException("You have exceeded the maximum number of disconnects. Please contact a moderator to rejoin.");
+                }
+
+                // Retry assignment if waiting (e.g. if rooms were just created)
+                if (user.Role == Role.Student && existingParticipant.Status == ParticipantStatus.Waiting)
+                {
+                    var room = await FindAvailableRoomAsync(instance.Id, session.MaxStudentsPerRoom);
+                    if (room != null)
+                    {
+                        existingParticipant.Status = ParticipantStatus.InRoom;
+                        existingParticipant.CurrentRoomId = room.Id;
+                        _logger.LogInformation("Assigned waiting student {UserId} to room {RoomId} on rejoin", userId, room.Id);
+                    }
+                }
 
                 // Reconnect
                 existingParticipant.IsConnected = true;
@@ -352,6 +529,10 @@ namespace ably_rest_apis.src.Features.Sessions
 
             participant.LeftAt = DateTime.UtcNow;
             participant.IsConnected = false;
+            
+            // Increment disconnect count if it's a student (or track for everyone, policy applies to students)
+            participant.DisconnectCount++;
+
             await _dbContext.SaveChangesAsync();
 
             return true;
@@ -371,7 +552,11 @@ namespace ably_rest_apis.src.Features.Sessions
                 return false;
 
             participant.IsConnected = false;
+            participant.DisconnectCount++; // Increment on force disconnect too? Or just leave? User asked "if you will leave".
+            // Assuming "DisconnectUserAsync" is system/timeout or explicit disconnect. Let's count it.
+
             var now = DateTime.UtcNow;
+            // ... (rest of method)
 
             // Create audit event
             var sessionEvent = new SessionEvent
@@ -491,8 +676,8 @@ namespace ably_rest_apis.src.Features.Sessions
         public async Task<BreakRequest> ApproveBreakAsync(Guid sessionId, Guid breakRequestId, Guid moderatorId)
         {
             var moderator = await _dbContext.Users.FindAsync(moderatorId);
-            if (moderator == null || moderator.Role != Role.Moderator)
-                throw new UnauthorizedAccessException("Only moderators can approve breaks");
+            if (moderator == null || (moderator.Role != Role.Moderator && moderator.Role != Role.Admin))
+                throw new UnauthorizedAccessException("Only moderators or admins can approve breaks");
 
             var breakRequest = await _dbContext.BreakRequests
                 .Include(br => br.Student)
@@ -566,11 +751,35 @@ namespace ably_rest_apis.src.Features.Sessions
             return breakRequest;
         }
 
+        public async Task<bool> GrantRejoinPermissionAsync(Guid sessionId, Guid studentId, Guid moderatorId)
+        {
+            var moderator = await _dbContext.Users.FindAsync(moderatorId);
+            if (moderator == null || (moderator.Role != Role.Moderator && moderator.Role != Role.Admin))
+                throw new UnauthorizedAccessException("Only moderators or admins can grant rejoin permission");
+
+            var instance = await GetActiveInstanceAsync(sessionId);
+            if (instance == null)
+                return false;
+
+            var participant = await _dbContext.SessionParticipants
+                .FirstOrDefaultAsync(sp => sp.SessionInstanceId == instance.Id && sp.UserId == studentId);
+
+            if (participant == null)
+                return false;
+
+            participant.HasRejoinPermission = true;
+            // participant.DisconnectCount = 0; // Optional: Reset count
+
+            await _dbContext.SaveChangesAsync();
+            _logger.LogInformation("Rejoin permission granted for student {StudentId} in session {SessionId} by {ModeratorId}", studentId, sessionId, moderatorId);
+            return true;
+        }
+
         public async Task<BreakRequest> DenyBreakAsync(Guid sessionId, Guid breakRequestId, Guid moderatorId, string reason)
         {
             var moderator = await _dbContext.Users.FindAsync(moderatorId);
-            if (moderator == null || moderator.Role != Role.Moderator)
-                throw new UnauthorizedAccessException("Only moderators can deny breaks");
+            if (moderator == null || (moderator.Role != Role.Moderator && moderator.Role != Role.Admin))
+                throw new UnauthorizedAccessException("Only moderators or admins can deny breaks");
 
             var breakRequest = await _dbContext.BreakRequests.FindAsync(breakRequestId);
             if (breakRequest == null)
@@ -768,6 +977,96 @@ namespace ably_rest_apis.src.Features.Sessions
         #endregion
 
         #region Room Operations
+
+        public async Task<Room> CreateRoomAsync(Guid sessionId, Guid assessorId, string name)
+        {
+            await _sessionLock.WaitAsync();
+            try
+            {
+                var assessor = await _dbContext.Users.FindAsync(assessorId);
+                if (assessor == null || assessor.Role != Role.Assessor)
+                    throw new UnauthorizedAccessException("Only assessors can create rooms");
+
+                var instance = await GetActiveInstanceAsync(sessionId);
+                if (instance == null)
+                    throw new InvalidOperationException("Session is not active");
+
+                var now = DateTime.UtcNow;
+
+                // Create room
+                var room = new Room
+                {
+                    Id = Guid.NewGuid(),
+                    SessionInstanceId = instance.Id,
+                    Name = name,
+                    CreatedAt = now,
+                    IsActive = true
+                };
+                _dbContext.Rooms.Add(room);
+
+                // Get assessor participant and assign to room
+                var assessorParticipant = await _dbContext.SessionParticipants
+                    .FirstOrDefaultAsync(sp => sp.SessionInstanceId == instance.Id && sp.UserId == assessorId);
+
+                if (assessorParticipant != null)
+                {
+                    assessorParticipant.CurrentRoomId = room.Id;
+                }
+
+                var participantIds = new List<string> { assessorId.ToString() };
+
+                // Create ROOM_CREATED event
+                var roomEvent = new SessionEvent
+                {
+                    Id = Guid.NewGuid(),
+                    SessionInstanceId = instance.Id,
+                    Type = EventType.ROOM_CREATED,
+                    EmittedByUserId = assessorId,
+                    EmittedByRole = Role.System,
+                    PayloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(new RoomCreatedPayload
+                    {
+                        RoomId = room.Id.ToString(),
+                        RoomName = room.Name,
+                        Participants = participantIds
+                    }),
+                    Timestamp = now,
+                    IsPublished = false
+                };
+                _dbContext.SessionEvents.Add(roomEvent);
+
+                await _dbContext.SaveChangesAsync();
+
+                // Publish ROOM_CREATED to Ably
+                var ablyEvent = new SessionEventDto
+                {
+                    EventId = roomEvent.Id.ToString(),
+                    Type = EventType.ROOM_CREATED.ToString(),
+                    SessionId = sessionId.ToString(),
+                    EmittedBy = new EmittedByDto { UserId = assessorId.ToString(), Role = "system" },
+                    Payload = new RoomCreatedPayload
+                    {
+                        RoomId = room.Id.ToString(),
+                        RoomName = room.Name,
+                        Participants = participantIds
+                    },
+                    Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+                };
+
+                var published = await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+                if (published)
+                {
+                    roomEvent.IsPublished = true;
+                    await _dbContext.SaveChangesAsync();
+                }
+
+                _logger.LogInformation("Room {RoomId} created by assessor {AssessorId}", room.Id, assessorId);
+                return room;
+            }
+            finally
+            {
+                _sessionLock.Release();
+            }
+        }
 
         public async Task<Room> CallNextStudentsAsync(Guid sessionId, Guid assessorId, List<Guid> studentIds)
         {

@@ -11,6 +11,31 @@ namespace ably_rest_apis.src.Api.DTOs
         public DateTime ReportingWindowEnd { get; set; }
         public int MaxStudentsPerRoom { get; set; } = 5;
         public int NumberOfRooms { get; set; } = 1;
+        // Assigned users
+        public List<Guid>? AssignedStudentIds { get; set; }
+        public List<Guid>? AssignedAssessorIds { get; set; }
+        public List<Guid>? AssignedModeratorIds { get; set; }
+    }
+
+    public class UpdateSessionRequest
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public DateTime ScheduledStartTime { get; set; }
+        public DateTime ScheduledEndTime { get; set; }
+        public DateTime ReportingWindowStart { get; set; }
+        public DateTime ReportingWindowEnd { get; set; }
+        public int MaxStudentsPerRoom { get; set; } = 5;
+        public int NumberOfRooms { get; set; } = 1;
+        // Assigned users
+        public List<Guid>? AssignedStudentIds { get; set; }
+        public List<Guid>? AssignedAssessorIds { get; set; }
+        public List<Guid>? AssignedModeratorIds { get; set; }
+    }
+
+    public class DeleteSessionRequest
+    {
+        public Guid AdminId { get; set; }
     }
 
     public class JoinSessionRequest
@@ -74,6 +99,12 @@ namespace ably_rest_apis.src.Api.DTOs
         public List<Guid> StudentIds { get; set; } = new List<Guid>();
     }
 
+    public class CreateRoomRequest
+    {
+        public Guid AssessorId { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
     public class StartEndSessionRequest
     {
         public Guid AdminId { get; set; }
@@ -99,6 +130,10 @@ namespace ably_rest_apis.src.Api.DTOs
         public int NumberOfRooms { get; set; }
         public string Status { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
+        // Assigned users
+        public List<Guid>? AssignedStudentIds { get; set; }
+        public List<Guid>? AssignedAssessorIds { get; set; }
+        public List<Guid>? AssignedModeratorIds { get; set; }
     }
 
     public class ParticipantResponse
@@ -148,4 +183,3 @@ namespace ably_rest_apis.src.Api.DTOs
         public List<ParticipantResponse> Students { get; set; } = new List<ParticipantResponse>();
     }
 }
-

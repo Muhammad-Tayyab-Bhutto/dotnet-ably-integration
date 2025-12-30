@@ -12,6 +12,8 @@ namespace ably_rest_apis.src.Application.Abstractions.Services
         Task<Session> CreateSessionAsync(Session session, Guid createdById);
         Task<Session?> GetSessionAsync(Guid sessionId);
         Task<List<Session>> GetAllSessionsAsync();
+        Task<Session> UpdateSessionAsync(Guid sessionId, Session session, Guid adminId);
+        Task<bool> DeleteSessionAsync(Guid sessionId, Guid adminId);
 
         // Session Instance Operations
         Task<SessionInstance> StartSessionAsync(Guid sessionId, Guid adminId);
@@ -31,6 +33,7 @@ namespace ably_rest_apis.src.Application.Abstractions.Services
         Task<BreakRequest> RequestBreakAsync(Guid sessionId, Guid studentId, string? reason);
         Task<BreakRequest> ApproveBreakAsync(Guid sessionId, Guid breakRequestId, Guid moderatorId);
         Task<BreakRequest> DenyBreakAsync(Guid sessionId, Guid breakRequestId, Guid moderatorId, string reason);
+        Task<bool> GrantRejoinPermissionAsync(Guid sessionId, Guid studentId, Guid moderatorId);
         Task<List<BreakRequest>> GetPendingBreakRequestsAsync(Guid sessionId);
 
         // Flag Operations
@@ -42,6 +45,7 @@ namespace ably_rest_apis.src.Application.Abstractions.Services
         Task<List<Flag>> GetActiveFlagsAsync(Guid sessionId);
 
         // Room Operations
+        Task<Room> CreateRoomAsync(Guid sessionId, Guid assessorId, string name);
         Task<Room> CallNextStudentsAsync(Guid sessionId, Guid assessorId, List<Guid> studentIds);
         Task<List<Room>> GetActiveRoomsAsync(Guid sessionId);
     }

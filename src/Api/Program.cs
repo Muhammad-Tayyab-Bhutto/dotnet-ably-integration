@@ -5,6 +5,7 @@ using ably_rest_apis.src.Application.Abstractions.Services;
 using ably_rest_apis.src.Features.Sessions;
 using ably_rest_apis.src.Infrastructure.Messaging;
 using ably_rest_apis.src.Infrastructure.Persistence.DbContext;
+using ably_rest_apis.src.Infrastructure.Zoom;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,6 +35,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 
 // Ably Publisher
 builder.Services.AddSingleton<IAblyPublisher, AblyPublisher>();
+
+// Zoom Video SDK JWT Service
+builder.Services.AddSingleton<IZoomJwtService, ZoomJwtService>();
 
 // Application Services
 builder.Services.AddScoped<ISessionService, SessionService>();

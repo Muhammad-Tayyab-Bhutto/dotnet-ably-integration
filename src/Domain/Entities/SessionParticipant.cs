@@ -18,6 +18,8 @@ namespace ably_rest_apis.src.Domain.Entities
         public string? KickReason { get; set; }
         public bool IsConnected { get; set; } = true;
         public Guid? CurrentRoomId { get; set; }
+        public int DisconnectCount { get; set; } = 0;
+        public bool HasRejoinPermission { get; set; } = false;
 
         // Navigation properties
         public virtual SessionInstance? SessionInstance { get; set; }

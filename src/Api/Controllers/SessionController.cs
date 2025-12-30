@@ -43,6 +43,11 @@ namespace ably_rest_apis.src.Api.Controllers
                     NumberOfRooms = request.NumberOfRooms
                 };
 
+                // Set assigned users
+                session.SetAssignedStudents(request.AssignedStudentIds);
+                session.SetAssignedAssessors(request.AssignedAssessorIds);
+                session.SetAssignedModerators(request.AssignedModeratorIds);
+
                 var created = await _sessionService.CreateSessionAsync(session, userId);
 
                 return Ok(new ApiResponse<SessionResponse>
@@ -59,7 +64,10 @@ namespace ably_rest_apis.src.Api.Controllers
                         MaxStudentsPerRoom = created.MaxStudentsPerRoom,
                         NumberOfRooms = created.NumberOfRooms,
                         Status = "Pending",
-                        CreatedAt = created.CreatedAt
+                        CreatedAt = created.CreatedAt,
+                        AssignedStudentIds = created.GetAssignedStudents(),
+                        AssignedAssessorIds = created.GetAssignedAssessors(),
+                        AssignedModeratorIds = created.GetAssignedModerators()
                     }
                 });
             }
@@ -106,8 +114,13 @@ namespace ably_rest_apis.src.Api.Controllers
                         Description = session.Description,
                         ScheduledStartTime = session.ScheduledStartTime,
                         ScheduledEndTime = session.ScheduledEndTime,
+                        MaxStudentsPerRoom = session.MaxStudentsPerRoom,
+                        NumberOfRooms = session.NumberOfRooms,
                         Status = status,
-                        CreatedAt = session.CreatedAt
+                        CreatedAt = session.CreatedAt,
+                        AssignedStudentIds = session.GetAssignedStudents(),
+                        AssignedAssessorIds = session.GetAssignedAssessors(),
+                        AssignedModeratorIds = session.GetAssignedModerators()
                     }
                 });
             }
@@ -131,26 +144,182 @@ namespace ably_rest_apis.src.Api.Controllers
             try
             {
                 var sessions = await _sessionService.GetAllSessionsAsync();
-                var response = sessions.Select(s => new SessionResponse
+                var responseList = new List<SessionResponse>();
+
+                foreach (var s in sessions)
                 {
-                    Id = s.Id,
-                    Name = s.Name,
-                    Description = s.Description,
-                    ScheduledStartTime = s.ScheduledStartTime,
-                    ScheduledEndTime = s.ScheduledEndTime,
-                    CreatedAt = s.CreatedAt
-                }).ToList();
+                    var activeInstance = await _sessionService.GetActiveInstanceAsync(s.Id);
+                    var status = activeInstance?.Status.ToString() ?? "Pending";
+
+                    responseList.Add(new SessionResponse
+                    {
+                        Id = s.Id,
+                        Name = s.Name,
+                        Description = s.Description,
+                        ScheduledStartTime = s.ScheduledStartTime,
+                        ScheduledEndTime = s.ScheduledEndTime,
+                        MaxStudentsPerRoom = s.MaxStudentsPerRoom,
+                        NumberOfRooms = s.NumberOfRooms,
+                        Status = status,
+                        CreatedAt = s.CreatedAt,
+                        AssignedStudentIds = s.GetAssignedStudents(),
+                        AssignedAssessorIds = s.GetAssignedAssessors(),
+                        AssignedModeratorIds = s.GetAssignedModerators()
+                    });
+                }
 
                 return Ok(new ApiResponse<List<SessionResponse>>
                 {
                     Success = true,
-                    Data = response
+                    Data = responseList
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting sessions");
                 return StatusCode(500, new ApiResponse<List<SessionResponse>>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Updates an existing session (Admin only)
+        /// PUT /api/sessions/{id}
+        /// </summary>
+        [HttpPut("{id}")]
+        public async Task<ActionResult<ApiResponse<SessionResponse>>> UpdateSession(
+            Guid id,
+            [FromBody] UpdateSessionRequest request,
+            [FromHeader(Name = "X-User-Id")] Guid userId)
+        {
+            try
+            {
+                var sessionUpdate = new Session
+                {
+                    Name = request.Name,
+                    Description = request.Description,
+                    ScheduledStartTime = request.ScheduledStartTime,
+                    ScheduledEndTime = request.ScheduledEndTime,
+                    ReportingWindowStart = request.ReportingWindowStart,
+                    ReportingWindowEnd = request.ReportingWindowEnd,
+                    MaxStudentsPerRoom = request.MaxStudentsPerRoom,
+                    NumberOfRooms = request.NumberOfRooms
+                };
+
+                // Set assigned users
+                sessionUpdate.SetAssignedStudents(request.AssignedStudentIds);
+                sessionUpdate.SetAssignedAssessors(request.AssignedAssessorIds);
+                sessionUpdate.SetAssignedModerators(request.AssignedModeratorIds);
+
+                var updated = await _sessionService.UpdateSessionAsync(id, sessionUpdate, userId);
+
+                return Ok(new ApiResponse<SessionResponse>
+                {
+                    Success = true,
+                    Message = "Session updated successfully",
+                    Data = new SessionResponse
+                    {
+                        Id = updated.Id,
+                        Name = updated.Name,
+                        Description = updated.Description,
+                        ScheduledStartTime = updated.ScheduledStartTime,
+                        ScheduledEndTime = updated.ScheduledEndTime,
+                        MaxStudentsPerRoom = updated.MaxStudentsPerRoom,
+                        NumberOfRooms = updated.NumberOfRooms,
+                        Status = "Pending",
+                        CreatedAt = updated.CreatedAt,
+                        AssignedStudentIds = updated.GetAssignedStudents(),
+                        AssignedAssessorIds = updated.GetAssignedAssessors(),
+                        AssignedModeratorIds = updated.GetAssignedModerators()
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<SessionResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<SessionResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<SessionResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<SessionResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Deletes a session (Admin only)
+        /// DELETE /api/sessions/{id}
+        /// </summary>
+        [HttpDelete("{id}")]
+        public async Task<ActionResult<ApiResponse<object>>> DeleteSession(
+            Guid id,
+            [FromHeader(Name = "X-User-Id")] Guid userId)
+        {
+            try
+            {
+                await _sessionService.DeleteSessionAsync(id, userId);
+
+                return Ok(new ApiResponse<object>
+                {
+                    Success = true,
+                    Message = "Session deleted successfully",
+                    Data = new { SessionId = id }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<object>
                 {
                     Success = false,
                     Error = ex.Message
@@ -389,6 +558,70 @@ namespace ably_rest_apis.src.Api.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error approving break in session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<BreakRequestResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Moderator rejects a break
+        /// POST /api/sessions/{id}/break-reject
+        /// </summary>
+        [HttpPost("{id}/break-reject")]
+        public async Task<ActionResult<ApiResponse<BreakRequestResponse>>> RejectBreak(
+            Guid id,
+            [FromBody] ApproveBreakRequest request) // Reusing ApproveBreakRequest as it has the same fields + we can add reason if needed
+        {
+            try
+            {
+                // Default reason if not provided
+                string reason = "Request denied by moderator";
+                
+                var breakRequest = await _sessionService.DenyBreakAsync(id, request.BreakRequestId, request.ModeratorId, reason);
+
+                return Ok(new ApiResponse<BreakRequestResponse>
+                {
+                    Success = true,
+                    Message = "Break rejected successfully",
+                    Data = new BreakRequestResponse
+                    {
+                        Id = breakRequest.Id,
+                        StudentId = breakRequest.StudentId,
+                        Status = breakRequest.Status.ToString(),
+                        RequestedAt = breakRequest.RequestedAt
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<BreakRequestResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new ApiResponse<BreakRequestResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<BreakRequestResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error rejecting break in session {SessionId}", id);
                 return StatusCode(500, new ApiResponse<BreakRequestResponse>
                 {
                     Success = false,
@@ -656,6 +889,69 @@ namespace ably_rest_apis.src.Api.Controllers
         }
 
         /// <summary>
+        /// Assessor manualy creates a room
+        /// POST /api/sessions/{id}/rooms
+        /// </summary>
+        [HttpPost("{id}/rooms")]
+        public async Task<ActionResult<ApiResponse<RoomResponse>>> CreateRoom(
+            Guid id,
+            [FromBody] CreateRoomRequest request)
+        {
+            try
+            {
+                var room = await _sessionService.CreateRoomAsync(id, request.AssessorId, request.Name);
+                
+                // Fetch room with participants to ensure DTO is complete
+                var activeRooms = await _sessionService.GetActiveRoomsAsync(id);
+                var createdRoom = activeRooms.FirstOrDefault(r => r.Id == room.Id);
+
+                return Ok(new ApiResponse<RoomResponse>
+                {
+                    Success = true,
+                    Message = "Room created successfully",
+                    Data = new RoomResponse
+                    {
+                        Id = room.Id,
+                        Name = room.Name,
+                        Participants = createdRoom?.Participants.Select(p => new ParticipantResponse
+                        {
+                            Id = p.Id,
+                            UserId = p.UserId,
+                            Name = p.User?.Name ?? "",
+                            Role = p.Role.ToString()
+                        }).ToList() ?? new List<ParticipantResponse>(),
+                        CreatedAt = room.CreatedAt
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<RoomResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<RoomResponse>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating room in session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<RoomResponse>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
         /// Gets active rooms for a session
         /// </summary>
         [HttpGet("{id}/rooms")]
@@ -688,6 +984,53 @@ namespace ably_rest_apis.src.Api.Controllers
             {
                 _logger.LogError(ex, "Error getting rooms for session {SessionId}", id);
                 return StatusCode(500, new ApiResponse<List<RoomResponse>>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Grants permission for a student to rejoin after max disconnects
+        /// POST /api/sessions/{id}/participants/{studentId}/permit-rejoin
+        /// </summary>
+        [HttpPost("{id}/participants/{studentId}/permit-rejoin")]
+        public async Task<ActionResult<ApiResponse<object>>> PermitRejoin(
+            Guid id,
+            Guid studentId,
+            [FromHeader(Name = "X-User-Id")] Guid moderatorId)
+        {
+            try
+            {
+                var result = await _sessionService.GrantRejoinPermissionAsync(id, studentId, moderatorId);
+                if (result)
+                {
+                    return Ok(new ApiResponse<object>
+                    {
+                        Success = true,
+                        Message = "Rejoin permission granted"
+                    });
+                }
+                
+                return NotFound(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = "Session or participant not found"
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error granting rejoin permission for student {StudentId} in session {SessionId}", studentId, id);
+                return StatusCode(500, new ApiResponse<object>
                 {
                     Success = false,
                     Error = ex.Message
