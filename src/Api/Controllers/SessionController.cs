@@ -411,8 +411,10 @@ namespace ably_rest_apis.src.Api.Controllers
                         UserId = participant.UserId,
                         Name = participant.User?.Name ?? "",
                         Role = participant.Role.ToString(),
+                        Status = participant.Status.ToString(),
                         JoinedAt = participant.JoinedAt,
-                        IsConnected = participant.IsConnected
+                        IsConnected = participant.IsConnected,
+                        CurrentRoomId = participant.CurrentRoomId
                     }
                 });
             }
@@ -918,7 +920,8 @@ namespace ably_rest_apis.src.Api.Controllers
                             Id = p.Id,
                             UserId = p.UserId,
                             Name = p.User?.Name ?? "",
-                            Role = p.Role.ToString()
+                            Role = p.Role.ToString(),
+                            CurrentRoomId = p.CurrentRoomId
                         }).ToList() ?? new List<ParticipantResponse>(),
                         CreatedAt = room.CreatedAt
                     }
@@ -969,7 +972,8 @@ namespace ably_rest_apis.src.Api.Controllers
                         Id = p.Id,
                         UserId = p.UserId,
                         Name = p.User?.Name ?? "",
-                        Role = p.Role.ToString()
+                        Role = p.Role.ToString(),
+                        CurrentRoomId = p.CurrentRoomId
                     }).ToList(),
                     CreatedAt = r.CreatedAt
                 }).ToList();
@@ -1112,7 +1116,8 @@ namespace ably_rest_apis.src.Api.Controllers
                         Role = p.Role.ToString(),
                         Status = p.Status.ToString(),
                         JoinedAt = p.JoinedAt,
-                        IsConnected = p.IsConnected
+                        IsConnected = p.IsConnected,
+                        CurrentRoomId = p.CurrentRoomId
                     }).ToList()
                 };
 
@@ -1162,7 +1167,8 @@ namespace ably_rest_apis.src.Api.Controllers
                     Role = p.Role.ToString(),
                     Status = p.Status.ToString(),
                     JoinedAt = p.JoinedAt,
-                    IsConnected = p.IsConnected
+                    IsConnected = p.IsConnected,
+                    CurrentRoomId = p.CurrentRoomId
                 }).ToList();
 
                 return Ok(new ApiResponse<List<ParticipantResponse>>

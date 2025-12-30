@@ -145,6 +145,7 @@ namespace ably_rest_apis.src.Api.DTOs
         public string Status { get; set; } = string.Empty;
         public DateTime JoinedAt { get; set; }
         public bool IsConnected { get; set; }
+        public Guid? CurrentRoomId { get; set; }
     }
 
     public class BreakRequestResponse
