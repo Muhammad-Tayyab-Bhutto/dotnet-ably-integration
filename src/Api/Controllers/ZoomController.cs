@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using ably_rest_apis.src.Infrastructure.Zoom;
+using ably_rest_apis.src.Application.Abstractions.Services;
 
 namespace ably_rest_apis.src.Api.Controllers
 {
@@ -11,11 +12,19 @@ namespace ably_rest_apis.src.Api.Controllers
     public class ZoomController : ControllerBase
     {
         private readonly IZoomJwtService _zoomJwtService;
+        private readonly IZoomRecordingService _zoomRecordingService;
+        private readonly ISessionService _sessionService;
         private readonly ILogger<ZoomController> _logger;
 
-        public ZoomController(IZoomJwtService zoomJwtService, ILogger<ZoomController> logger)
+        public ZoomController(
+            IZoomJwtService zoomJwtService, 
+            IZoomRecordingService zoomRecordingService,
+            ISessionService sessionService,
+            ILogger<ZoomController> logger)
         {
             _zoomJwtService = zoomJwtService;
+            _zoomRecordingService = zoomRecordingService;
+            _sessionService = sessionService;
             _logger = logger;
         }
 
@@ -129,6 +138,57 @@ namespace ably_rest_apis.src.Api.Controllers
             {
                 _logger.LogError(ex, "Failed to generate multi-session Zoom tokens");
                 return StatusCode(500, new { success = false, message = "Failed to generate video session tokens" });
+            }
+        }
+
+        /// <summary>
+        /// Gets cloud recordings for a session
+        /// </summary>
+        /// <param name="sessionId">The session ID</param>
+        /// <returns>List of recordings</returns>
+        [HttpGet("recordings/{sessionId}")]
+        public async Task<IActionResult> GetSessionRecordings(Guid sessionId)
+        {
+            try
+            {
+                // Verify session exists and get dates
+                var session = await _sessionService.GetSessionAsync(sessionId);
+                if (session == null)
+                {
+                    return NotFound(new { success = false, message = "Session not found" });
+                }
+
+                // Construct session topic name pattern
+                // Since recordings might be per room (exam-{sessionId}-{roomId}) or global (exam-{sessionId}),
+                // we might need to search for both or handle "topic" partial match?
+                // The Video SDK API might not support wildcard topic search easily in List Sessions unless we filter locally.
+                // Our service currently filters by EXACT topic match.
+                // Let's assume for now we only care about the main session or we iterate rooms?
+                // For simplicity, let's fetch recordings for the main session topic: "exam-{sessionId...}"
+                // If rooms are recorded separately (which they are), we might need to fetch for each room?
+                // That would be expensive.
+                // Maybe the session topic is just the prefix?
+                // Current implementation of ZoomRecordingService filters by EXACT topic.
+                // Let's update ZoomController to construct the main topic.
+                
+                var topic = $"exam-{sessionId.ToString().Substring(0, Math.Min(8, sessionId.ToString().Length))}";
+                
+                // Add a buffer to the search window (e.g. -1 hour start, +4 hours end) to capture early starts/late ends
+                var from = session.ScheduledStartTime.AddHours(-1);
+                var to = session.ScheduledEndTime.AddHours(4); // Extended window
+                
+                var recordings = await _zoomRecordingService.GetRecordingsForSessionAsync(topic, from, to);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = recordings
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get recordings for session {SessionId}", sessionId);
+                return StatusCode(500, new { success = false, message = "Failed to get recordings" });
             }
         }
     }

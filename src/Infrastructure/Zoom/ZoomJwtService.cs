@@ -19,6 +19,12 @@ namespace ably_rest_apis.src.Infrastructure.Zoom
         /// <param name="role">0 = participant, 1 = host</param>
         /// <returns>JWT token string</returns>
         string GenerateSessionToken(string sessionName, string userId, int role = 0);
+
+        /// <summary>
+        /// Generates a JWT token for Zoom Video SDK API calls
+        /// </summary>
+        /// <returns>JWT token string</returns>
+        string GenerateApiToken();
     }
 
     /// <summary>
@@ -54,7 +60,7 @@ namespace ably_rest_apis.src.Infrastructure.Zoom
                     typ = "JWT"
                 };
 
-                // JWT Payload for Video SDK
+                // JWT Payload for Video SDK Session Join
                 var payload = new
                 {
                     app_key = _sdkKey,
@@ -66,29 +72,58 @@ namespace ably_rest_apis.src.Infrastructure.Zoom
                     exp = exp
                 };
 
-                // Create JWT
-                var headerJson = JsonSerializer.Serialize(header);
-                var payloadJson = JsonSerializer.Serialize(payload);
-
-                var headerBase64 = Base64UrlEncode(Encoding.UTF8.GetBytes(headerJson));
-                var payloadBase64 = Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
-
-                var signatureInput = $"{headerBase64}.{payloadBase64}";
-                var signature = ComputeHmacSha256(signatureInput, _sdkSecret);
-
-                var jwt = $"{headerBase64}.{payloadBase64}.{signature}";
-
-                _logger.LogInformation(
-                    "Generated Zoom JWT for session {SessionName}, user {UserId}, role {Role}",
-                    sessionName, userId, role);
-
-                return jwt;
+                return CreateJwt(header, payload);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to generate Zoom JWT");
+                _logger.LogError(ex, "Failed to generate Zoom Session JWT");
                 throw;
             }
+        }
+
+        public string GenerateApiToken()
+        {
+            try
+            {
+                var now = DateTimeOffset.UtcNow;
+                var iat = now.ToUnixTimeSeconds();
+                var exp = now.AddHours(2).ToUnixTimeSeconds(); // Short lived for API call
+
+                var header = new
+                {
+                    alg = "HS256",
+                    typ = "JWT"
+                };
+
+                var payload = new
+                {
+                    app_key = _sdkKey,
+                    version = 1,
+                    iat = iat,
+                    exp = exp
+                };
+
+                return CreateJwt(header, payload);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to generate Zoom API JWT");
+                throw;
+            }
+        }
+
+        private string CreateJwt(object header, object payload)
+        {
+            var headerJson = JsonSerializer.Serialize(header);
+            var payloadJson = JsonSerializer.Serialize(payload);
+
+            var headerBase64 = Base64UrlEncode(Encoding.UTF8.GetBytes(headerJson));
+            var payloadBase64 = Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
+
+            var signatureInput = $"{headerBase64}.{payloadBase64}";
+            var signature = ComputeHmacSha256(signatureInput, _sdkSecret);
+
+            return $"{headerBase64}.{payloadBase64}.{signature}";
         }
 
         private static string Base64UrlEncode(byte[] input)

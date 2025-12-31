@@ -38,6 +38,7 @@ builder.Services.AddSingleton<IAblyPublisher, AblyPublisher>();
 
 // Zoom Video SDK JWT Service
 builder.Services.AddSingleton<IZoomJwtService, ZoomJwtService>();
+builder.Services.AddHttpClient<IZoomRecordingService, ZoomRecordingService>();
 
 // Application Services
 builder.Services.AddScoped<ISessionService, SessionService>();
