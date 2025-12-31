@@ -86,7 +86,7 @@ namespace ably_rest_apis.src.Infrastructure.Zoom
             try
             {
                 var now = DateTimeOffset.UtcNow;
-                var iat = now.ToUnixTimeSeconds();
+                var iat = now.AddSeconds(-60).ToUnixTimeSeconds(); // 1 minute in past for clock skew
                 var exp = now.AddHours(2).ToUnixTimeSeconds(); // Short lived for API call
 
                 var header = new

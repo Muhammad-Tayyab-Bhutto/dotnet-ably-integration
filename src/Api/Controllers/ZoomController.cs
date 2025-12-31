@@ -191,5 +191,124 @@ namespace ably_rest_apis.src.Api.Controllers
                 return StatusCode(500, new { success = false, message = "Failed to get recordings" });
             }
         }
+
+        /// <summary>
+        /// Gets all cloud recordings (global view)
+        /// </summary>
+        /// <returns>List of recordings</returns>
+        [HttpGet("recordings")]
+        public async Task<IActionResult> GetAllRecordings([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+        {
+            try
+            {
+                // Default to last 30 days if not specified
+                var startDate = from ?? DateTime.UtcNow.AddDays(-30);
+                var endDate = to ?? DateTime.UtcNow;
+
+                var recordings = await _zoomRecordingService.GetAllRecordingsAsync(startDate, endDate);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = recordings
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get all recordings");
+                return StatusCode(500, new { success = false, message = "Failed to get recordings" });
+            }
+        }
+
+        /// <summary>
+        /// Starts cloud recording for a session
+        /// </summary>
+        /// <param name="request">Request body containing sessionId and layout</param>
+        /// <returns>Success status</returns>
+        [HttpPost("recordings/start")]
+        public async Task<IActionResult> StartRecording([FromBody] StartRecordingRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(request.SessionId))
+                {
+                    return BadRequest(new { success = false, message = "Session ID is required" });
+                }
+
+                _logger.LogInformation("Requesting to start recording for session {SessionId} with layout {Layout}", request.SessionId, request.Layout);
+
+                var success = await _zoomRecordingService.StartRecordingAsync(request.SessionId, request.Layout);
+
+                if (success)
+                {
+                    return Ok(new { success = true, message = "Recording started" });
+                }
+                else
+                {
+                    return StatusCode(500, new { success = false, message = "Failed to start recording. Ensure session is active." });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to start recording");
+                return StatusCode(500, new { success = false, message = "Failed to start recording" });
+            }
+        }
+
+        [HttpPost("recordings/pause")]
+        public async Task<IActionResult> PauseRecording([FromBody] RecordingControlRequest request)
+        {
+            try
+            {
+                var success = await _zoomRecordingService.PauseRecordingAsync(request.SessionId);
+                return success ? Ok(new { success = true }) : StatusCode(500, new { success = false, message = "Failed to pause recording" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to pause recording");
+                return StatusCode(500, new { success = false, message = "Failed to pause recording" });
+            }
+        }
+
+        [HttpPost("recordings/resume")]
+        public async Task<IActionResult> ResumeRecording([FromBody] RecordingControlRequest request)
+        {
+            try
+            {
+                var success = await _zoomRecordingService.ResumeRecordingAsync(request.SessionId);
+                return success ? Ok(new { success = true }) : StatusCode(500, new { success = false, message = "Failed to resume recording" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to resume recording");
+                return StatusCode(500, new { success = false, message = "Failed to resume recording" });
+            }
+        }
+
+        [HttpPost("recordings/stop")]
+        public async Task<IActionResult> StopRecording([FromBody] RecordingControlRequest request)
+        {
+            try
+            {
+                var success = await _zoomRecordingService.StopRecordingAsync(request.SessionId);
+                return success ? Ok(new { success = true }) : StatusCode(500, new { success = false, message = "Failed to stop recording" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to stop recording");
+                return StatusCode(500, new { success = false, message = "Failed to stop recording" });
+            }
+        }
+    }
+
+    public class StartRecordingRequest
+    {
+        public string SessionId { get; set; } = "";
+        public string Layout { get; set; } = "";
+    }
+
+    public class RecordingControlRequest
+    {
+        public string SessionId { get; set; } = "";
     }
 }

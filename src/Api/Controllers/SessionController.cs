@@ -1096,6 +1096,110 @@ namespace ably_rest_apis.src.Api.Controllers
         }
 
         /// <summary>
+        /// Pauses a session (Admin/Moderator)
+        /// POST /api/sessions/{id}/pause
+        /// </summary>
+        [HttpPost("{id}/pause")]
+        public async Task<ActionResult<ApiResponse<object>>> PauseSession(
+            Guid id,
+            [FromHeader(Name = "X-User-Id")] Guid userId)
+        {
+            try
+            {
+                var instance = await _sessionService.PauseSessionAsync(id, userId);
+
+                return Ok(new ApiResponse<object>
+                {
+                    Success = true,
+                    Message = "Session paused successfully",
+                    Data = new
+                    {
+                        SessionId = id,
+                        InstanceId = instance.Id,
+                        Status = instance.Status.ToString()
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error pausing session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// Resumes a session (Admin/Moderator)
+        /// POST /api/sessions/{id}/resume
+        /// </summary>
+        [HttpPost("{id}/resume")]
+        public async Task<ActionResult<ApiResponse<object>>> ResumeSession(
+            Guid id,
+            [FromHeader(Name = "X-User-Id")] Guid userId)
+        {
+            try
+            {
+                var instance = await _sessionService.ResumeSessionAsync(id, userId);
+
+                return Ok(new ApiResponse<object>
+                {
+                    Success = true,
+                    Message = "Session resumed successfully",
+                    Data = new
+                    {
+                        SessionId = id,
+                        InstanceId = instance.Id,
+                        Status = instance.Status.ToString()
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resuming session {SessionId}", id);
+                return StatusCode(500, new ApiResponse<object>
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
         /// Gets waiting students in a session
         /// GET /api/sessions/{id}/waiting-students
         /// </summary>

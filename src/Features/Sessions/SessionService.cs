@@ -295,6 +295,116 @@ namespace ably_rest_apis.src.Features.Sessions
             return instance;
         }
 
+        public async Task<SessionInstance> PauseSessionAsync(Guid sessionId, Guid adminId)
+        {
+            var admin = await _dbContext.Users.FindAsync(adminId);
+            if (admin == null || (admin.Role != Role.Admin && admin.Role != Role.Moderator))
+                throw new UnauthorizedAccessException("Only admins or moderators can pause sessions");
+
+            var instance = await GetActiveInstanceAsync(sessionId);
+            if (instance == null)
+                throw new InvalidOperationException("No active session instance found");
+
+            var now = DateTime.UtcNow;
+            instance.Status = SessionStatus.Paused;
+            
+            // Create audit event
+            var sessionEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = instance.Id,
+                Type = EventType.SESSION_PAUSED, // Ensure this enum exists or add it
+                EmittedByUserId = adminId,
+                EmittedByRole = admin.Role,
+                PayloadJson = "{}",
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(sessionEvent);
+
+            await _dbContext.SaveChangesAsync();
+
+            // Publish to Ably
+            var ablyEvent = new SessionEventDto
+            {
+                EventId = sessionEvent.Id.ToString(),
+                Type = "SESSION_PAUSED",
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = adminId.ToString(), Role = admin.Role.ToString().ToLower() },
+                Payload = new { },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            var published = await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+            if (published)
+            {
+                sessionEvent.IsPublished = true;
+                await _dbContext.SaveChangesAsync();
+            }
+
+            _logger.LogInformation("Paused session {SessionId}", sessionId);
+            return instance;
+        }
+
+        public async Task<SessionInstance> ResumeSessionAsync(Guid sessionId, Guid adminId)
+        {
+            var admin = await _dbContext.Users.FindAsync(adminId);
+            if (admin == null || (admin.Role != Role.Admin && admin.Role != Role.Moderator))
+                throw new UnauthorizedAccessException("Only admins or moderators can resume sessions");
+
+            var instance = await _dbContext.SessionInstances
+                .FirstOrDefaultAsync(si => si.SessionId == sessionId && si.Status == SessionStatus.Paused);
+
+            if (instance == null)
+            {
+                // Check if it's already active
+                var active = await GetActiveInstanceAsync(sessionId);
+                if (active != null) return active; 
+                
+                throw new InvalidOperationException("No paused session instance found");
+            }
+
+            var now = DateTime.UtcNow;
+            instance.Status = SessionStatus.Active;
+
+            // Create audit event
+            var sessionEvent = new SessionEvent
+            {
+                Id = Guid.NewGuid(),
+                SessionInstanceId = instance.Id,
+                Type = EventType.SESSION_RESUMED, // Ensure this enum exists or add it. If not distinct, reuse STARTED or custom string for type if enum limited.
+                EmittedByUserId = adminId,
+                EmittedByRole = admin.Role,
+                PayloadJson = "{}",
+                Timestamp = now,
+                IsPublished = false
+            };
+            _dbContext.SessionEvents.Add(sessionEvent);
+
+            await _dbContext.SaveChangesAsync();
+
+            // Publish to Ably
+            var ablyEvent = new SessionEventDto
+            {
+                EventId = sessionEvent.Id.ToString(),
+                Type = "SESSION_RESUMED",
+                SessionId = sessionId.ToString(),
+                EmittedBy = new EmittedByDto { UserId = adminId.ToString(), Role = admin.Role.ToString().ToLower() },
+                Payload = new { },
+                Timestamp = new DateTimeOffset(now).ToUnixTimeSeconds()
+            };
+
+            var published = await _ablyPublisher.PublishAsync(sessionId.ToString(), ablyEvent);
+            if (published)
+            {
+                sessionEvent.IsPublished = true;
+                await _dbContext.SaveChangesAsync();
+            }
+
+            _logger.LogInformation("Resumed session {SessionId}", sessionId);
+            return instance;
+        }
+
         public async Task<SessionInstance?> GetActiveInstanceAsync(Guid sessionId)
         {
             return await _dbContext.SessionInstances

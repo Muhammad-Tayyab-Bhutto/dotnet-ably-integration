@@ -18,6 +18,8 @@ namespace ably_rest_apis.src.Application.Abstractions.Services
         // Session Instance Operations
         Task<SessionInstance> StartSessionAsync(Guid sessionId, Guid adminId);
         Task<SessionInstance> EndSessionAsync(Guid sessionId, Guid adminId);
+        Task<SessionInstance> PauseSessionAsync(Guid sessionId, Guid adminId);
+        Task<SessionInstance> ResumeSessionAsync(Guid sessionId, Guid adminId);
         Task<SessionInstance?> GetActiveInstanceAsync(Guid sessionId);
 
         // Participant Operations
